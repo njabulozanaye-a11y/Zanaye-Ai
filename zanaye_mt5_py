@@ -126,7 +126,8 @@ def run_bot():
             if trades_today >= MAX_TRADES_PER_DAY:
                 time.sleep(60)
                 continue
-            if has_open_trade():
+                        if has_open_trade():
+                manage_trades()
                 time.sleep(30)
                 continue
             signal, entry, sl, tp, reason = get_signal(df)
