@@ -145,3 +145,51 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+# ===== ZANAYE AI UPGRADE: Trailing + Breakeven =====
+def manage_trades():
+    positions = mt5.positions_get(symbol=SYMBOL)
+    if positions is None:
+        return
+    for pos in positions:
+        if pos.magic != MAGIC:
+            continue
+        
+        tick = mt5.symbol_info_tick(SYMBOL)
+        current_price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
+        entry = pos.price_open
+        current_sl = pos.sl
+        atr = 2.0  # Approx ATR for Gold M15, bot will use fixed trail
+
+        # Profit in price
+        profit = (current_price - entry) if pos.type == mt5.POSITION_TYPE_BUY else (entry - current_price)
+
+        new_sl = current_sl
+
+        # 1. Breakeven: If profit > $5 (5.0 price), move SL to entry + $1
+        if profit >= 5.0:
+            be_sl = entry + 1.0 if pos.type == mt5.POSITION_TYPE_BUY else entry - 1.0
+            if pos.type == mt5.POSITION_TYPE_BUY and be_sl > current_sl:
+                new_sl = be_sl
+            if pos.type == mt5.POSITION_TYPE_SELL and be_sl < current_sl:
+                new_sl = be_sl
+
+        # 2. Trailing: If profit > $10, trail SL $5 behind price
+        if profit >= 10.0:
+            trail_sl = current_price - 5.0 if pos.type == mt5.POSITION_TYPE_BUY else current_price + 5.0
+            if pos.type == mt5.POSITION_TYPE_BUY and trail_sl > new_sl:
+                new_sl = trail_sl
+            if pos.type == mt5.POSITION_TYPE_SELL and trail_sl < new_sl:
+                new_sl = trail_sl
+
+        # Update SL if changed
+        if new_sl != current_sl:
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": pos.ticket,
+                "symbol": SYMBOL,
+                "sl": round(new_sl, 2),
+                "tp": pos.tp,
+                "magic": MAGIC,
+            }
+            result = mt5.order_send(request)
+            print(f"Trailing updated Ticket {pos.ticket} New SL {new_sl:.2f} -> {result.comment}")
