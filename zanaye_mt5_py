@@ -1,0 +1,147 @@
+# ZANAYE AI - MT5 Auto Trading Bot
+# XAUUSD | M15 | Risk 0.5%
+
+import MetaTrader5 as mt5
+import pandas as pd
+import numpy as np
+import time
+from datetime import datetime
+
+SYMBOL = "XAUUSD"
+TIMEFRAME = mt5.TIMEFRAME_M15
+RISK_PERCENT = 0.5
+MAGIC = 20261117
+MAX_TRADES_PER_DAY = 3
+DEVIATION = 20
+
+def connect_mt5():
+    if not mt5.initialize():
+        print("MT5 failed:", mt5.last_error())
+        return False
+    print("Connected:", mt5.account_info().login, "Balance:", mt5.account_info().balance)
+    return True
+
+def get_data():
+    rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, 250)
+    if rates is None:
+        return None
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    return df
+
+def add_indicators(df):
+    df = df.copy()
+    df['ema20'] = df['close'].ewm(span=20).mean()
+    df['ema50'] = df['close'].ewm(span=50).mean()
+    df['ema200'] = df['close'].ewm(span=200).mean()
+    delta = df['close'].diff()
+    gain = delta.where(delta > 0, 0).rolling(14).mean()
+    loss = -delta.where(delta < 0, 0).rolling(14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    ema12 = df['close'].ewm(span=12).mean()
+    ema26 = df['close'].ewm(span=26).mean()
+    df['macd'] = ema12 - ema26
+    df['macd_signal'] = df['macd'].ewm(span=9).mean()
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df['atr'] = tr.rolling(14).mean()
+    return df
+
+def calculate_lot(balance, entry, sl):
+    risk_money = balance * (RISK_PERCENT / 100)
+    stop_distance = abs(entry - sl)
+    if stop_distance == 0:
+        return 0.01
+    lot = risk_money / (stop_distance * 100)
+    return min(max(0.01, round(lot, 2)), 5.0)
+
+def get_signal(df):
+    df = add_indicators(df)
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    price = last['close']
+    atr = last['atr']
+    rsi = last['rsi']
+    uptrend = last['ema50'] > last['ema200']
+    downtrend = last['ema50'] < last['ema200']
+    if uptrend and 40 < rsi < 65 and last['macd'] > last['macd_signal'] and prev['macd'] <= prev['macd_signal']:
+        sl = price - (atr * 1.5)
+        tp = price + ((price - sl) * 2.0)
+        return "BUY", price, sl, tp, f"Uptrend RSI {rsi:.1f} MACD Cross"
+    if downtrend and 35 < rsi < 60 and last['macd'] < last['macd_signal'] and prev['macd'] >= prev['macd_signal']:
+        sl = price + (atr * 1.5)
+        tp = price - ((sl - price) * 2.0)
+        return "SELL", price, sl, tp, f"Downtrend RSI {rsi:.1f} MACD Cross"
+    return "NO_TRADE", price, 0, 0, f"No setup RSI {rsi:.1f}"
+
+def has_open_trade():
+    positions = mt5.positions_get(symbol=SYMBOL)
+    if positions is None:
+        return False
+    return any(pos.magic == MAGIC for pos in positions)
+
+def send_order(signal_type, sl, tp, lot):
+    tick = mt5.symbol_info_tick(SYMBOL)
+    price = tick.ask if signal_type == "BUY" else tick.bid
+    order_type = mt5.ORDER_TYPE_BUY if signal_type == "BUY" else mt5.ORDER_TYPE_SELL
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": SYMBOL,
+        "volume": lot,
+        "type": order_type,
+        "price": price,
+        "sl": round(sl, 2),
+        "tp": round(tp, 2),
+        "deviation": DEVIATION,
+        "magic": MAGIC,
+        "comment": "ZANAYE AI",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_FOK,
+    }
+    result = mt5.order_send(request)
+    print(f"Order {signal_type}: {result.retcode} - {result.comment}")
+    return result.retcode == mt5.TRADE_RETCODE_DONE
+
+def run_bot():
+    if not connect_mt5():
+        return
+    mt5.symbol_select(SYMBOL, True)
+    trades_today = 0
+    last_candle_time = None
+    print("ZANAYE AI Started - Waiting for M15 candle...")
+    try:
+        while True:
+            df = get_data()
+            if df is None:
+                time.sleep(10)
+                continue
+            current_candle = df.iloc[-1]['time']
+            if current_candle == last_candle_time:
+                time.sleep(10)
+                continue
+            last_candle_time = current_candle
+            if trades_today >= MAX_TRADES_PER_DAY:
+                time.sleep(60)
+                continue
+            if has_open_trade():
+                time.sleep(30)
+                continue
+            signal, entry, sl, tp, reason = get_signal(df)
+            balance = mt5.account_info().balance
+            print(f"[{datetime.now()}] {signal} | {entry:.2f} | {reason}")
+            if signal in ["BUY", "SELL"]:
+                lot = calculate_lot(balance, entry, sl)
+                print(f"Placing {signal} SL {sl:.2f} TP {tp:.2f} Lot {lot}")
+                if send_order(signal, sl, tp, lot):
+                    trades_today += 1
+            time.sleep(15)
+    except KeyboardInterrupt:
+        print("Bot stopped")
+    finally:
+        mt5.shutdown()
+
+if __name__ == "__main__":
+    run_bot()
