@@ -193,4 +193,4 @@ def manage_trades():
                 "magic": MAGIC,
             }
             result = mt5.order_send(request)
-            print(f"Trailing updated Ticket {pos.ticket} New SL {new_sl:.2f} -> {result.comment}")
+            print(f"Trailing updated Ticket {pos.ticket} New SL {new_sl:.2f} -> {result.comment}") 
