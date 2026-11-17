@@ -111,7 +111,8 @@ def send_order(signal_type, sl, tp, lot):
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_FOK,
     }
-    result = mt5.order_send(request)
+    result = mt5.order_send(request)    if result.retcode == mt5.TRADE_RETCODE_DONE:
+        send_telegram(f"🚀 ZANAYE AI\n{signal_type} XAUUSD\nPrice: {price:.2f}\nSL: {sl:.2f} TP: {tp:.2f}\nLot: {lot}")
     print(f"Order {signal_type}: {result.retcode} - {result.comment}")
     return result.retcode == mt5.TRADE_RETCODE_DONE
 
